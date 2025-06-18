@@ -44,8 +44,7 @@ class MyMqttClient():
         self.__keepalive = keepalive
         self.__ssl = ssl
         self.__ssl_params = ssl_params
-        self.topics = []
-        self.qos = None
+        self.topics = {}
         # Network status flag.
         self.__nw_flag = True
         # Create a mutex.
@@ -116,23 +115,23 @@ class MyMqttClient():
             ValueError: If topic type is invalid or subscription fails.
         '''
         if not hasattr(self, 'topics'):
-            self.topics = []  # Ensure it's initialized
+            self.topics = {}
 
         try:
             if isinstance(topic, str):
                 self.client.subscribe(topic, qos)
-                self.topics.append(topic)
+                self.topics[topic] = qos  # Save QoS
             elif isinstance(topic, list):
                 for t in topic:
                     if not isinstance(t, str):
                         raise ValueError("Invalid topic in list: %s" % str(t))
                     self.client.subscribe(t, qos)
-                    self.topics.append(t)
+                    self.topics[t] = qos
             else:
                 raise ValueError("Topic must be a string or a list of strings.")
 
         except Exception as e:
-            if self.logger is not None:
+            if self.logger:
                 self.logger.error("MQTT subscription failed: %s" % str(e))
             raise ValueError("Failed to subscribe to topic(s): %s" % str(e))
 
@@ -180,7 +179,7 @@ class MyMqttClient():
             bool: True if reconnection and subscription succeed, False otherwise.
         '''
         if self.mp_lock.locked():
-            if self.logger is not None:
+            if self.logger:
                 self.logger.info("Reconnection already in progress.")
             return False
 
@@ -189,7 +188,7 @@ class MyMqttClient():
             if self.__status_cb:
                 self.__status_cb(self.RECONNECTING)
 
-            if self.logger is not None:
+            if self.logger:
                 self.logger.info("Closing previous MQTT connection.")
             self.client.close()
 
@@ -199,39 +198,51 @@ class MyMqttClient():
                     call_state = dataCall.getInfo(1, 0)
                     if call_state != -1 and call_state[2][0] == 1:
                         try:
-                            if self.logger is not None:
+                            if self.logger:
                                 self.logger.info("Network ready. Attempting MQTT reconnection.")
                             self.connect()
 
                         except Exception as e:
-                            if self.logger is not None:
+                            if self.logger:
                                 self.logger.error("MQTT connection failed: %s" % str(e))
                             self.client.close()
-
                             utime.sleep(5)
                             continue
 
                         # Resubscribe to topics
+                        all_subscribed = True
                         try:
-                            if hasattr(self, 'topics') and isinstance(self.topics, list):
-                                for t in self.topics:
+                            if hasattr(self, 'topics') and isinstance(self.topics, dict):
+                                for topic, qos in self.topics.items():
                                     try:
-                                        self.client.subscribe(t, self.qos)
-                                        if self.logger is not None:
-                                            self.logger.info("Resubscribed to topic: %s" % t)
+                                        self.client.subscribe(topic, qos)
+                                        if self.logger:
+                                            self.logger.info("Resubscribed to topic: %s with QoS %d" % (topic, qos))
                                     except Exception as sub_e:
-                                        if self.logger is not None:
-                                            self.logger.error("Failed to resubscribe to topic '%s': %s" % (t, str(sub_e)))
-                            elif isinstance(self.topic, str):
-                                self.client.subscribe(self.topic, self.qos)
-                                if self.logger is not None:
-                                    self.logger.info("Resubscribed to topic: %s" % self.topic)
+                                        all_subscribed = False
+                                        if self.logger:
+                                            self.logger.error("Failed to resubscribe to topic '%s': %s" % (topic, str(sub_e)))
                             else:
-                                if self.logger is not None:
+                                if self.logger:
                                     self.logger.warning("No valid topic(s) to resubscribe.")
-                            break
+                                all_subscribed = False
+                            
+                            if all_subscribed:
+                                if self.logger:
+                                    self.logger.info("Reconnection and all subscriptions successful.")
+                                if self.__status_cb:
+                                    self.__status_cb(self.CONNECTED)
+                                return True
+                            else:
+                                if self.logger:
+                                    self.logger.warning("Subscription incomplete. Retrying...")
+                                self.client.close()
+                                if self.__status_cb:
+                                    self.__status_cb(self.FAILED)
+                                utime.sleep(5)
+                                continue
                         except Exception as sub_all_e:
-                            if self.logger is not None:
+                            if self.logger:
                                 self.logger.error("Subscription error: %s" % str(sub_all_e))
                             self.client.close()
                             if self.__status_cb:
@@ -239,25 +250,26 @@ class MyMqttClient():
                             utime.sleep(5)
                             continue
                     else:
-                        if self.logger is not None:
+                        if self.logger:
                             self.logger.warning("Data call inactive. Waiting...")
                         utime.sleep(10)
                 else:
-                    if self.logger is not None:
+                    if self.logger:
                         self.logger.warning("Network not registered. Waiting...")
                     utime.sleep(5)
 
         except Exception as general_e:
-            if self.logger is not None:
+            if self.logger:
                 self.logger.error("Unexpected error in reconnect(): %s" % str(general_e))
             if self.__status_cb:
                 self.__status_cb(self.FAILED)
         finally:
             if self.mp_lock.locked():
                 self.mp_lock.release()
-            if self.logger is not None:
+            if self.logger:
                 self.logger.info("Reconnection attempt complete.")
-        return True
+                
+        return False
 
 
     def nw_cb(self, args):
@@ -267,12 +279,12 @@ class MyMqttClient():
         nw_sta = args[1]
         if nw_sta == 1:
             # Network connected.
-            if self.logger is not None:
+            if self.logger:
                 self.logger.info("*** network connected! ***")
             self.__nw_flag = True
         else:
             # Network disconnected.
-            if self.logger is not None:
+            if self.logger:
                 self.logger.info("*** network not connected! ***")
             self.__nw_flag = False
 

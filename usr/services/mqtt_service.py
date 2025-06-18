@@ -2,7 +2,7 @@
 File: mqtt_service.py
 Created Date: Friday June 13th 2025
 Author: Samman Shrestha
-Last Modified: We/06/2025 12:27:50
+Last Modified: We/06/2025 01:52:49
 Modified By: Samman Shrestha
 Copyright (c) 2025 YARSA TECH
 '''
@@ -102,7 +102,7 @@ def thread_mqtt():
         reconn=False  # Disable automatic reconnection
     )
 
-    mqtt_client.setLogger(log.DEBUG)
+    # mqtt_client.setLogger(log.DEBUG)
 
     # Set callback functions
     mqtt_client.set_callback(mqtt_recv_msg_cb)
